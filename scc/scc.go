@@ -32,9 +32,13 @@ type Client struct {
 	clientMu sync.Mutex   // clientMu protects the client during calls that modify the CheckRedirect func.
 	client   *http.Client // HTTP client used to communicate with the API.
 
-	// Base URL for API requests. BaseURL should
+	// Master URL for API requests. BaseURL should
 	// always be specified with a trailing slash.
 	BaseURL *url.URL
+
+	// Shadow URL for API requests. Shadow should
+	// always be specified with a trailing slash.
+	ShadowURL *url.URL
 
 	// User agent used when communicating with the GitHub API.
 	UserAgent string
@@ -42,8 +46,9 @@ type Client struct {
 	common service // Reuse a single struct instead of allocating one for each service on the heap.
 
 	// Services used for talking to different parts of the SCC API.
-	Common *CommonService
-	Backup *BackupService
+	Common    *CommonService
+	Backup    *BackupService
+	HAService *HAService
 }
 
 type service struct {
@@ -62,7 +67,7 @@ func (c *Client) Client() *http.Client {
 // provided, a new http.Client will be used. To use API methods which require
 // authentication, provide an http.Client that will perform the authentication
 // for you (such as that provided by the golang.org/x/oauth2 library).
-func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
+func NewClient(baseURL, shadowUrl string, httpClient *http.Client) (*Client, error) {
 	baseEndpoint, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
@@ -71,10 +76,21 @@ func NewClient(baseURL string, httpClient *http.Client) (*Client, error) {
 		httpClient = &http.Client{}
 	}
 
-	c := &Client{client: httpClient, BaseURL: baseEndpoint, UserAgent: userAgent}
+	var shadowUrlEndpoint *url.URL
+	if shadowUrl != "" {
+		shadowUrlEndpoint, err = url.Parse(shadowUrl)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		shadowUrlEndpoint = nil
+	}
+
+	c := &Client{client: httpClient, BaseURL: baseEndpoint, ShadowURL: shadowUrlEndpoint, UserAgent: userAgent}
 	c.common.client = c
 	c.Common = (*CommonService)(&c.common)
 	c.Backup = (*BackupService)(&c.common)
+	c.HAService = (*HAService)(&c.common)
 	return c, nil
 }
 
@@ -88,6 +104,45 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}) (*http.Requ
 		return nil, fmt.Errorf("BaseURL must have a trailing slash, but %q does not", c.BaseURL)
 	}
 	u, err := c.BaseURL.Parse(urlStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf io.ReadWriter
+	if body != nil {
+		buf = &bytes.Buffer{}
+		enc := json.NewEncoder(buf)
+		enc.SetEscapeHTML(false)
+		err := enc.Encode(body)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	req, err := http.NewRequest(method, u.String(), buf)
+	if err != nil {
+		return nil, err
+	}
+
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+	return req, nil
+}
+
+// NewShadowRequest creates an API request to shadow instance.
+func (c *Client) NewShadowRequest(method, urlStr string, body interface{}) (*http.Request, error) {
+	if c.ShadowURL == nil {
+		return nil, fmt.Errorf("ShadowURL not set")
+	}
+	if !strings.HasSuffix(c.ShadowURL.Path, "/") {
+		return nil, fmt.Errorf("ShadowURL must have a trailing slash, but %q does not", c.ShadowURL)
+	}
+	u, err := c.ShadowURL.Parse(urlStr)
 	if err != nil {
 		return nil, err
 	}
