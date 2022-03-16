@@ -52,7 +52,7 @@ type MasterConfiguration struct {
 // GetMasterConfiguration gets master instance configuration:
 //  ●haEnabled: a Boolean value that indicates whether or not a shadow system is allowed to connect.
 //  ●allowedShadowHost: the name of the shadow host (a string) that is allowed to connect; an empty string signifies that any host is allowed to connect as shadow.
-func (s *HAService) GetMasterConfiguration(ctx context.Context, description string) (*MasterConfiguration, *Response, error) {
+func (s *HAService) GetMasterConfiguration(ctx context.Context) (*MasterConfiguration, *Response, error) {
 	req, err := s.client.NewRequest("GET", "api/v1/configuration/connector/ha/master/config", nil)
 	if err != nil {
 		return nil, nil, err
